@@ -156,7 +156,6 @@ class LocalDampingCosine(AlphaScreening):
         """
         super().__init__(alpha) 
 
-
     def forward(self, pair_dist, radius):
         """
         :param pair_dist: torch.tensor, dtype=float64: 'Neighborlist' distances for coulomb energies.
@@ -172,6 +171,67 @@ class LocalDampingCosine(AlphaScreening):
         screening = torch.where((pair_dist<self.alpha), screening, torch.ones_like(screening))
         
         return screening
+
+
+class CutoffCosine(AlphaScreening): 
+    """ Implements the cosine cut-off for the Coulomb Interactions. 
+    The Cutoff begins at 0.9*alpha and goes smoothly to zero at alpha
+    Note this is the same cutoff used for the interaction layer in hipnn. 
+    Args:
+        AlphaScreening : Helper class that is inherited.
+    """
+    def __init__(self, alpha): 
+        """ 
+        :param alpha (torch.tensor): Scalar value for the cutoff distance. 
+        """
+        super().__init__(alpha) 
+
+    def forward(self, pair_dist, radius):
+        """
+        :param pair_dist: torch.tensor, dtype=float64: 'Neighborlist' distances for coulomb energies.
+        :param radius: Maximum radius that Screened-Coulomb is evaluated upto. 
+        :return screening: Weights for screening for each pair.
+        """
+        pi = torch.tensor([3.141592653589793238], device=pair_dist.device)
+
+        alpha = self.alpha
+        k = 0.9
+        r_s = alpha * k
+        screening = torch.square(
+            torch.cos(0.5*pi*(pair_dist-r_s)/((1-k)*alpha))
+        )
+        screening = torch.where((pair_dist>r_s), screening, torch.ones_like(screening))
+        mask = torch.where((pair_dist<alpha), screening, torch.zeros_like(screening))
+
+        return screening*mask
+
+
+    
+class CombineScreenings(torch.nn.Module):
+    """ Returns products of different screenings for Screened Coulomb Interactions. 
+    """
+    def __init__(self, screening_list):
+        super().__init__()
+        self.SL = screening_list
+
+    def forward(self, pair_dist, radius):
+        """ Product of different screenings applied to pair_dist upto radius.
+        
+        :param pair_dist: torch.tensor, dtype=float64: 'Neighborlist' distances for coulomb energies.
+        :param radius: Maximum radius that Screened-Coulomb is evaluated upto. 
+        :return screening: Weights for screening for all pair_dist.
+        """
+        screening = None 
+
+        for s in self.SL:
+            if screening is None:
+                screening = s(pair_dist=pair_dist, radius=radius)
+            else:
+                screening = screening * s(pair_dist=pair_dist, radius=radius)
+        
+        return screening
+
+
 
 
 class QScreening(torch.nn.Module):
